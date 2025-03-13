@@ -42,6 +42,9 @@ Valid options are:
     -s, --ipset <ipset_name>
                 Ipset name for the GfwList domains
                 (If not given, ipset rules will not be generated.)
+    -n, --nftset <nftset_spec>
+                Specify nftables set for the GfwList domains
+                (If not given, nftables rules will not be generated.)            
     -o, --output <FILE>
                 /path/to/output_filename
     -i, --insecure
@@ -112,6 +115,7 @@ get_args(){
     EXCLUDE_DOMAIN_FILE=''
     IPV4_PATTERN='^((2[0-4][0-9]|25[0-5]|[01]?[0-9][0-9]?)\.){3}(2[0-4][0-9]|25[0-5]|[01]?[0-9][0-9]?)$'
     IPV6_PATTERN='^((([0-9A-Fa-f]{1,4}:){7}([0-9A-Fa-f]{1,4}|:))|(([0-9A-Fa-f]{1,4}:){6}(:[0-9A-Fa-f]{1,4}|((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3})|:))|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){1,2})|:((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3})|:))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){1,3})|((:[0-9A-Fa-f]{1,4})?:((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}))|:))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){1,4})|((:[0-9A-Fa-f]{1,4}){0,2}:((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}))|:))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){1,5})|((:[0-9A-Fa-f]{1,4}){0,3}:((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}))|:))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){1,6})|((:[0-9A-Fa-f]{1,4}){0,4}:((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}))|:))|(:(((:[0-9A-Fa-f]{1,4}){1,7})|((:[0-9A-Fa-f]{1,4}){0,5}:((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}))|:)))(%.+)?$'
+    NFTSET_PATTERN='^(4#(ip|inet)#|6#(ip6|inet)#)[a-zA-Z0-9_]+#[a-zA-Z0-9_]+$'
 
     while [ ${#} -gt 0 ]; do
         case "${1}" in
@@ -147,6 +151,10 @@ get_args(){
                 ;;
            --exclude-domain-file)
                 EXCLUDE_DOMAIN_FILE="$2"
+                shift
+                ;;
+            --nftset | -n)
+                NFTSET_SPEC="$2"
                 shift
                 ;;
             *)
@@ -200,6 +208,17 @@ get_args(){
                 WITH_IPSET=1
             fi
         fi
+
+        # Check nftset spec
+        if [ ! -z $NFTSET_SPEC ]; then
+            NFTSET_TEST=$(echo $NFTSET_SPEC | grep -E $NFTSET_PATTERN)
+            if [ "$NFTSET_TEST" != "$NFTSET_SPEC" ]; then
+                _red 'Error: Please enter a valid nftset specification.\n'
+                exit 1
+            else
+                WITH_NFTSET=1
+            fi
+        fi
     fi
 
     if [ ! -z $EXTRA_DOMAIN_FILE ] && [ ! -f $EXTRA_DOMAIN_FILE ]; then
@@ -243,7 +262,7 @@ process(){
     HEAD_FILTER_PATTERN='s#^(\|\|?)?(https?://)?##g'
     TAIL_FILTER_PATTERN='s#/.*$|%2F.*$##g'
     DOMAIN_PATTERN='([a-zA-Z0-9][-a-zA-Z0-9]*(\.[a-zA-Z0-9][-a-zA-Z0-9]*)+)'
-    HANDLE_WILDCARD_PATTERN='s#^(([a-zA-Z0-9]*\*[-a-zA-Z0-9]*)?(\.))?([a-zA-Z0-9][-a-zA-Z0-9]*(\.[a-zA-Z0-9][-a-zA-Z0-9]*)+)(\*[a-zA-Z0-9]*)?#\4#g'
+    HANDLE_WILDCARD_PATTERN='s#^(([a-zA-Z0-9]*\*[-a-zA-Fa-f0-9]*)?(\.))?([a-zA-Z0-9][-a-zA-Z0-9]*(\.[a-zA-Z0-9][-a-zA-Z0-9]*)+)(\*[a-zA-Z0-9]*)?#\4#g'
 
     printf 'Converting GfwList to ' && _green $OUT_TYPE && printf ' ...\n' 
     _yellow '\nWARNING:\nThe following lines in GfwList contain regex, and might be ignored:\n\n'
@@ -285,8 +304,12 @@ process(){
             _green 'Ipset rules included.'
             sort -u $DOMAIN_FILE | $SED_ERES 's#(.+)#server=/\1/'$DNS_IP'\#'$DNS_PORT'\
 ipset=/\1/'$IPSET_NAME'#g' > $CONF_TMP_FILE
+        elif [ $WITH_NFTSET -eq 1 ]; then
+            _green 'Nftset rules included.'
+            sort -u $DOMAIN_FILE | $SED_ERES 's|(.+)|server=/\1/'$DNS_IP'#'$DNS_PORT'\
+nftset=/\1/'$NFTSET_SPEC'|g' > $CONF_TMP_FILE
         else
-            _green 'Ipset rules not included.'
+            _green 'Ipset and nftset rules not included.'
             sort -u $DOMAIN_FILE | $SED_ERES 's#(.+)#server=/\1/'$DNS_IP'\#'$DNS_PORT'#g' > $CONF_TMP_FILE
         fi
 
